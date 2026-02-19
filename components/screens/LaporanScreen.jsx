@@ -1,24 +1,131 @@
 'use client';
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { calcStats } from "@/lib/utils";
+import {
+  createBorangTransitFilename,
+  downloadXLSX,
+  generateBorangTransitWorkbookFromTemplate,
+} from "@/lib/exportXLSX";
 
-export default function LaporanScreen({ sessions, students }) {
+export default function LaporanScreen({ sessions, students, curriculum, classes }) {
   const [tab, setTab] = useState("Sesi");
   const [selectedSession, setSelectedSession] = useState(sessions[0] || null);
   const tabs = ["Sesi", "Murid", "Kelas"];
 
+  // Export state
+  const [showExport, setShowExport] = useState(false);
+  const [exportClass, setExportClass] = useState("");
+  const [exportSet, setExportSet] = useState("");
+  const [exportBusy, setExportBusy] = useState("");
+
+  // Derive sets from curriculum
+  const curriculumSets = useMemo(() => {
+    const map = new Map();
+    curriculum.forEach(c => {
+      if (!map.has(c.set_id)) map.set(c.set_id, { id: c.set_id, name: c.set_name });
+    });
+    return [...map.values()];
+  }, [curriculum]);
+
+  // Export handler
+  const buildExportPayload = () => {
+    if (!exportClass || !exportSet) return null;
+
+    const cls = classes.find(c => c.id === exportClass);
+    const setObj = curriculumSets.find(s => s.id === exportSet);
+    if (!cls || !setObj) return null;
+
+    const classStudents = students
+      .filter(s => s.class_id === exportClass)
+      .sort((a, b) => a.full_name.localeCompare(b.full_name));
+
+    const setItems = curriculum.filter(c => c.set_id === exportSet);
+    const temaOrder = [];
+    const temaMap = {};
+    setItems.forEach(item => {
+      if (!temaMap[item.tema]) {
+        temaMap[item.tema] = [];
+        temaOrder.push(item.tema);
+      }
+      temaMap[item.tema].push(item);
+    });
+
+    const temaGroups = temaOrder.map(tema => ({
+      tema,
+      tajuks: temaMap[tema].map(t => ({
+        id: t.id,
+        tajuk: t.tajuk,
+      })),
+    }));
+
+    const setItemIds = new Set(setItems.map(i => i.id));
+    const relevantSessions = sessions.filter(
+      s => s.class_id === exportClass && setItemIds.has(s.curriculum_item_id)
+    );
+
+    const resultMatrix = {};
+    classStudents.forEach(s => { resultMatrix[s.id] = {}; });
+
+    relevantSessions.forEach(sess => {
+      const itemId = sess.curriculum_item_id;
+      Object.entries(sess.results || {}).forEach(([studentId, tpVal]) => {
+        if (resultMatrix[studentId] && !resultMatrix[studentId][itemId]) {
+          resultMatrix[studentId][itemId] = tpVal;
+        }
+      });
+    });
+
+    return {
+      cls,
+      setObj,
+      classStudents,
+      temaGroups,
+      resultMatrix,
+      title: `BORANG TRANSIT PBD ${setObj.name.toUpperCase()} / ${new Date().getFullYear()}`,
+      schoolName: '',
+      subjectName: setObj.name,
+      teacherName: '',
+    };
+  };
+
+  const handleExportXLSX = async () => {
+    const payload = buildExportPayload();
+    if (!payload) return;
+
+    setExportBusy("xlsx");
+    try {
+      const workbookBuffer = await generateBorangTransitWorkbookFromTemplate({
+        title: payload.title,
+        schoolName: payload.schoolName,
+        className: payload.cls.name,
+        subjectName: payload.subjectName,
+        teacherName: payload.teacherName,
+        students: payload.classStudents,
+        temaGroups: payload.temaGroups,
+        resultMatrix: payload.resultMatrix,
+      });
+
+      const filename = createBorangTransitFilename(payload.cls.name, payload.setObj.name, "xlsx");
+      downloadXLSX(workbookBuffer, filename);
+      setShowExport(false);
+    } catch (error) {
+      alert(`Ralat eksport XLSX: ${error.message}`);
+    } finally {
+      setExportBusy("");
+    }
+  };
+
   const renderSesi = () => {
-    if (!selectedSession) return <div className="empty-state"><div className="empty-icon">📋</div><div className="empty-text">Tiada sesi</div></div>;
+    if (!selectedSession) return <div className="empty-state"><div className="empty-icon">-</div><div className="empty-text">Tiada sesi</div></div>;
     const studs = students.filter(s => s.class_name === selectedSession.kelas);
     const stats = calcStats(selectedSession.results, studs);
-    const distColors = ["#E8476A","#E8688A","#7BAE7F","#5A9660","#3D7042","#2A5030"];
     return (
       <div>
         <div style={{ padding: "12px 16px" }}>
           <div className="field-label">Pilih Sesi</div>
           <select className="field-input" value={selectedSession.id} onChange={e => setSelectedSession(sessions.find(s => s.id == e.target.value))}>
-            {sessions.map(s => <option key={s.id} value={s.id}>{s.tarikh} · {s.kelas} · {s.tajuk_code}</option>)}
+            {sessions.map(s => <option key={s.id} value={s.id}>{s.tarikh} / {s.kelas} / {s.tajuk}</option>)}
           </select>
         </div>
         <div className="card" style={{ background: "var(--strawberry-pale)", border: "2px solid var(--strawberry-light)" }}>
@@ -26,7 +133,7 @@ export default function LaporanScreen({ sessions, students }) {
           <div style={{ fontSize: 13, fontWeight: 700 }}>Tarikh: {selectedSession.tarikh}</div>
           <div style={{ fontSize: 13, fontWeight: 700 }}>Kelas: {selectedSession.kelas}</div>
           <div style={{ fontSize: 13, fontWeight: 700 }}>Tema: {selectedSession.tema}</div>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>Tajuk: {selectedSession.tajuk_code} · {selectedSession.tajuk_title}</div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>Tajuk: {selectedSession.tajuk}</div>
         </div>
         <div className="stat-grid">
           <div className="stat-card"><div className="stat-value">{stats.filled}</div><div className="stat-label">Ditaksir</div></div>
@@ -57,8 +164,7 @@ export default function LaporanScreen({ sessions, students }) {
           </table>
         </div>
         <div style={{ padding: "4px 16px 16px", display: "flex", gap: 10 }}>
-          <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => window.print()}>🖨 Cetak</button>
-          <button className="btn btn-green" style={{ flex: 1 }}>⬇ PDF</button>
+          <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => window.print()}>Cetak</button>
         </div>
       </div>
     );
@@ -70,7 +176,7 @@ export default function LaporanScreen({ sessions, students }) {
         {students.map(student => {
           const sessResults = sessions.filter(s => s.kelas === student.class_name);
           const tps = sessResults.map(s => s.results[student.id]).filter(r => r && r !== "TD");
-          const avg = tps.length ? (tps.map(t => parseInt(t.replace("TP",""))).reduce((a,b)=>a+b,0)/tps.length).toFixed(1) : "–";
+          const avg = tps.length ? (tps.map(t => parseInt(t.replace("TP",""))).reduce((a,b)=>a+b,0)/tps.length).toFixed(1) : "-";
           return (
             <div key={student.id} className="card" style={{ marginLeft: 0, marginRight: 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -78,7 +184,7 @@ export default function LaporanScreen({ sessions, students }) {
                   <div style={{ fontWeight: 800, fontSize: 14 }}>{student.full_name}</div>
                   <div style={{ fontSize: 12, color: "var(--muted)" }}>{student.class_name}</div>
                 </div>
-                {avg !== "–" && <span className="pill pill-pink" style={{ fontSize: 14 }}>Avg: {avg}</span>}
+                {avg !== "-" && <span className="pill pill-pink" style={{ fontSize: 14 }}>Avg: {avg}</span>}
               </div>
               {sessResults.length > 0 && (
                 <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -100,14 +206,14 @@ export default function LaporanScreen({ sessions, students }) {
   };
 
   const renderKelas = () => {
-    const classes = [...new Set(students.map(s => s.class_name))];
+    const classNames = [...new Set(students.map(s => s.class_name))];
     return (
       <div style={{ padding: "12px 16px" }}>
-        {classes.map(kelas => {
+        {classNames.map(kelas => {
           const studs = students.filter(s => s.class_name === kelas);
           const sess = sessions.filter(s => s.kelas === kelas);
           const allResults = sess.flatMap(s => studs.map(st => s.results[st.id]).filter(r => r && r !== "TD"));
-          const avg = allResults.length ? (allResults.map(t => parseInt(t.replace("TP",""))).reduce((a,b)=>a+b,0)/allResults.length).toFixed(1) : "–";
+          const avg = allResults.length ? (allResults.map(t => parseInt(t.replace("TP",""))).reduce((a,b)=>a+b,0)/allResults.length).toFixed(1) : "-";
           const lowTP = studs.filter(s => {
             const tps = sess.map(ses => ses.results[s.id]).filter(r => r && r !== "TD");
             const a = tps.length ? tps.map(t => parseInt(t.replace("TP",""))).reduce((a,b)=>a+b,0)/tps.length : null;
@@ -116,14 +222,14 @@ export default function LaporanScreen({ sessions, students }) {
           return (
             <div key={kelas} className="card" style={{ marginLeft: 0, marginRight: 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <div style={{ fontWeight: 800, fontSize: 16 }}>🏫 {kelas}</div>
+                <div style={{ fontWeight: 800, fontSize: 16 }}>Kelas {kelas}</div>
                 <span className="pill pill-pink">Avg: {avg}</span>
               </div>
-              <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{studs.length} murid · {sess.length} sesi</div>
+              <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{studs.length} murid / {sess.length} sesi</div>
               {lowTP.length > 0 && (
                 <div style={{ marginTop: 10, padding: "8px 10px", background: "var(--strawberry-pale)", borderRadius: 10 }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: "var(--strawberry)", marginBottom: 4 }}>⚠ Perlu Perhatian ({lowTP.length})</div>
-                  {lowTP.map(s => <div key={s.id} style={{ fontSize: 12, fontWeight: 600 }}>· {s.full_name}</div>)}
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "var(--strawberry)", marginBottom: 4 }}>Perlu Perhatian ({lowTP.length})</div>
+                  {lowTP.map(s => <div key={s.id} style={{ fontSize: 12, fontWeight: 600 }}>{s.full_name}</div>)}
                 </div>
               )}
             </div>
@@ -139,6 +245,60 @@ export default function LaporanScreen({ sessions, students }) {
         <div className="page-title">Laporan</div>
         <div className="page-subtitle">Eksport & Analisis</div>
       </div>
+
+      {/* Export Borang Transit Button */}
+      <div style={{ padding: "0 16px 8px" }}>
+        <button className="btn btn-green btn-full" onClick={() => setShowExport(true)}>
+          Eksport Borang Transit PBD (XLSX)
+        </button>
+      </div>
+
+      {/* Export Modal */}
+      {showExport && (
+        <div className="modal-overlay" onClick={() => setShowExport(false)}>
+          <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+            <div className="modal-handle"/>
+            <div className="modal-title">Eksport Borang Transit PBD</div>
+            <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600, marginBottom: 16 }}>
+              Pilih kelas dan set kurikulum untuk dijana sebagai CSV atau XLSX.
+            </div>
+
+            <div className="field-group" style={{ marginBottom: 12 }}>
+              <div className="field-label">Kelas</div>
+              <select className="field-input" value={exportClass} onChange={e => setExportClass(e.target.value)}>
+                <option value="">-- Pilih Kelas --</option>
+                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+
+            <div className="field-group" style={{ marginBottom: 16 }}>
+              <div className="field-label">Set Kurikulum</div>
+              <select className="field-input" value={exportSet} onChange={e => setExportSet(e.target.value)}>
+                <option value="">-- Pilih Set Kurikulum --</option>
+                {curriculumSets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+
+            {exportClass && exportSet && (
+              <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginBottom: 12, padding: "8px 12px", background: "var(--matcha-pale)", borderRadius: 10 }}>
+                {students.filter(s => s.class_id === exportClass).length} murid /{" "}
+                {curriculum.filter(c => c.set_id === exportSet).length} tajuk /{" "}
+                {sessions.filter(s => s.class_id === exportClass).length} sesi
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className="btn btn-primary btn-full"
+                disabled={!exportClass || !exportSet || !!exportBusy}
+                onClick={handleExportXLSX}>
+                {exportBusy === "xlsx" ? "Menjana..." : "Muat Turun XLSX"}
+              </button>
+              <button className="btn btn-ghost btn-full" onClick={() => setShowExport(false)}>Batal</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="filter-row">
         {tabs.map(t => (
           <button key={t} className={`filter-chip ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
@@ -152,3 +312,4 @@ export default function LaporanScreen({ sessions, students }) {
     </div>
   );
 }
+

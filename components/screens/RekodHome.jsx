@@ -10,15 +10,20 @@ export default function RekodHome({ sessions, students, onOpenSession, onNewSess
   const classes = ["Semua", ...new Set(students.map(s => s.class_name))];
   const filtered = sessions.filter(s => {
     const matchKelas = kelasFilter === "Semua" || s.kelas === kelasFilter;
-    const matchSearch = !search || s.tema.toLowerCase().includes(search.toLowerCase()) || s.tajuk_title.toLowerCase().includes(search.toLowerCase());
+    const matchSearch = !search || s.tema.toLowerCase().includes(search.toLowerCase()) || s.tajuk.toLowerCase().includes(search.toLowerCase());
     return matchKelas && matchSearch;
   });
 
   return (
     <div className="screen">
-      <div className="page-header">
-        <div className="page-title">Rekod PBD</div>
-        <div className="page-subtitle">{sessions.length} sesi dicatatkan</div>
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div className="page-title">Rekod PBD</div>
+          <div className="page-subtitle">{sessions.length} sesi dicatatkan</div>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={onNewSession}>
+          <Icons.plus /> Rekod Baru
+        </button>
       </div>
       <div className="filter-row">
         {classes.map(k => (
@@ -44,7 +49,7 @@ export default function RekodHome({ sessions, students, onOpenSession, onNewSess
             <div className="session-info">
               <div className="session-kelas">🏫 {session.kelas}</div>
               <div className="session-tema">{session.tema}</div>
-              <div className="session-tajuk">{session.tajuk_code} · {session.tajuk_title}</div>
+              <div className="session-tajuk">{session.tajuk}</div>
               <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
                 <span className="pill pill-pink">✓ {stats.filled}/{stats.total}</span>
                 {stats.tdCount > 0 && <span className="pill pill-green">TD: {stats.tdCount}</span>}
@@ -55,7 +60,7 @@ export default function RekodHome({ sessions, students, onOpenSession, onNewSess
           </div>
         );
       })}
-      <button className="fab" onClick={onNewSession}><Icons.plus/></button>
+
     </div>
   );
 }

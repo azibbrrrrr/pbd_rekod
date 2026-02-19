@@ -11,8 +11,7 @@ export default function CreateSession({ curriculum, students, onSave, onBack }) 
     kelas: classes[0] || "",
     curriculum_set: sets[0] || "",
     tema: "",
-    tajuk_code: "",
-    tajuk_title: "",
+    tajuk: "",
     catatan: "",
   });
 
@@ -20,7 +19,7 @@ export default function CreateSession({ curriculum, students, onSave, onBack }) 
   const tajuks = curriculum.filter(c => c.set_name === form.curriculum_set && c.tema === form.tema);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const isValid = form.kelas && form.tema && form.tajuk_code;
+  const isValid = form.kelas && form.tema && form.tajuk;
 
   return (
     <div className="screen">
@@ -45,13 +44,13 @@ export default function CreateSession({ curriculum, students, onSave, onBack }) 
           </div>
           <div className="field-group">
             <div className="field-label">Set Kurikulum *</div>
-            <select className="field-input" value={form.curriculum_set} onChange={e => { set("curriculum_set", e.target.value); set("tema", ""); set("tajuk_code", ""); }}>
+            <select className="field-input" value={form.curriculum_set} onChange={e => { set("curriculum_set", e.target.value); set("tema", ""); set("tajuk", ""); }}>
               {sets.map(s => <option key={s}>{s}</option>)}
             </select>
           </div>
           <div className="field-group">
             <div className="field-label">Tema *</div>
-            <select className="field-input" value={form.tema} onChange={e => { set("tema", e.target.value); set("tajuk_code", ""); }}>
+            <select className="field-input" value={form.tema} onChange={e => { set("tema", e.target.value); set("tajuk", ""); }}>
               <option value="">— Pilih Tema —</option>
               {themes.map(t => <option key={t}>{t}</option>)}
             </select>
@@ -59,13 +58,9 @@ export default function CreateSession({ curriculum, students, onSave, onBack }) 
           {form.tema && (
             <div className="field-group">
               <div className="field-label">Tajuk *</div>
-              <select className="field-input" value={form.tajuk_code} onChange={e => {
-                const t = tajuks.find(t => t.tajuk_code === e.target.value);
-                set("tajuk_code", e.target.value);
-                set("tajuk_title", t ? t.tajuk_title : "");
-              }}>
+              <select className="field-input" value={form.tajuk} onChange={e => set("tajuk", e.target.value)}>
                 <option value="">— Pilih Tajuk —</option>
-                {tajuks.map(t => <option key={t.id} value={t.tajuk_code}>{t.tajuk_code} · {t.tajuk_title}</option>)}
+                {tajuks.map(t => <option key={t.id} value={t.tajuk}>{t.tajuk}</option>)}
               </select>
             </div>
           )}

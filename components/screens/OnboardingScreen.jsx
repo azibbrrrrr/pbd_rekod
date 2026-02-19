@@ -1,7 +1,12 @@
 'use client';
 
 import { useState, useRef } from "react";
-import { parseCSV, normalizeStr, detectStudentCols, detectCurriculumCols, extractTajukCode } from "@/lib/utils";
+import {
+  parseCSV,
+  normalizeStr,
+  validateStudentCSVFormat,
+  validateCurriculumCSVFormat,
+} from "@/lib/utils";
 import { SEED_STUDENTS, SEED_CURRICULUM } from "@/lib/seed-data";
 import { Icons } from "@/components/ui/Icons";
 import EditableStudentTable from "@/components/ui/EditableStudentTable";
@@ -41,8 +46,10 @@ export default function OnboardingScreen({ onComplete, createClass, importStuden
     try {
       const text = await readFile(file);
       const { headers, rows } = parseCSV(text);
+      const formatCheck = validateStudentCSVFormat(headers, { requireClass: true });
+      if (!formatCheck.valid) { setStudentError(formatCheck.error); return; }
       if (rows.length === 0) { setStudentError("Fail CSV kosong atau format tidak dikenali."); return; }
-      const cols = detectStudentCols(headers);
+      const cols = formatCheck.columns;
       const seen = new Set();
       let added = 0, skipped = 0, errors = 0;
       const parsed = [];
@@ -72,22 +79,17 @@ export default function OnboardingScreen({ onComplete, createClass, importStuden
     try {
       const text = await readFile(file);
       const { headers, rows } = parseCSV(text);
+      const formatCheck = validateCurriculumCSVFormat(headers);
+      if (!formatCheck.valid) { setCurriculumError(formatCheck.error); return; }
       if (rows.length === 0) { setCurriculumError("Fail CSV kosong atau format tidak dikenali."); return; }
-      const cols = detectCurriculumCols(headers);
+      const cols = formatCheck.columns;
       let added = 0, errors = 0;
       const parsed = [];
       rows.forEach(row => {
         const tema = (row[cols.tema] || "").trim();
-        const tajukRaw = (row[cols.tajuk] || "").trim();
-        if (!tema || !tajukRaw) { errors++; return; }
-        let tajuk_code = "";
-        let tajuk_title = tajukRaw;
-        if (autoSplitCode) {
-          const extracted = extractTajukCode(tajukRaw);
-          tajuk_code = extracted.code;
-          tajuk_title = extracted.title || tajukRaw;
-        }
-        parsed.push({ tema, tajuk_code, tajuk_title });
+        const tajuk = (row[cols.tajuk] || "").trim();
+        if (!tema || !tajuk) { errors++; return; }
+        parsed.push({ tema, tajuk });
         added++;
       });
       setCurriculumRows(parsed);
@@ -118,7 +120,7 @@ export default function OnboardingScreen({ onComplete, createClass, importStuden
     setSaveError("");
     try {
       const validStudents = studentRows.filter(r => r.class_name && r.full_name);
-      const validCurriculum = curriculumRows.filter(r => r.tema && r.tajuk_title);
+      const validCurriculum = curriculumRows.filter(r => r.tema && r.tajuk);
 
       // Group students by class and import
       if (validStudents.length > 0 && createClass && importStudents) {
@@ -160,7 +162,7 @@ export default function OnboardingScreen({ onComplete, createClass, importStuden
       </div>
       <div style={{ padding: "0 24px 40px", display: "flex", flexDirection: "column", gap: 10 }}>
         <button className="btn btn-primary btn-full" onClick={() => setStep(1)}>Mula →</button>
-        <button className="btn btn-ghost btn-full" onClick={() => onComplete(null, null)}>Guna data contoh & langkau</button>
+        {/* <button className="btn btn-ghost btn-full" onClick={() => onComplete(null, null)}>Guna data contoh & langkau</button> */}
       </div>
     </div>
   );
@@ -273,7 +275,7 @@ export default function OnboardingScreen({ onComplete, createClass, importStuden
   }
 
   // ── STEP 2: Import Curriculum ─────────────────────────────────────────────
-  const validCurrCount = curriculumRows.filter(r => r.tema && r.tajuk_title).length;
+  const validCurrCount = curriculumRows.filter(r => r.tema && r.tajuk).length;
 
   return (
     <div className="screen" style={{ paddingBottom: 20 }}>
@@ -294,13 +296,7 @@ export default function OnboardingScreen({ onComplete, createClass, importStuden
           <input className="field-input" value={setName} onChange={e => setSetName(e.target.value)} placeholder="cth. RBT Tahun 3 2026"/>
         </div>
 
-        {/* Options */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <input type="checkbox" id="autoCode" checked={autoSplitCode} onChange={e => setAutoSplitCode(e.target.checked)} style={{ accentColor: "var(--strawberry)", width: 16, height: 16 }}/>
-          <label htmlFor="autoCode" style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)", cursor: "pointer" }}>
-            Auto-extract kod dari tajuk (cth. &quot;1.1.1 Mengenal pasti…&quot; → kod: 1.1.1)
-          </label>
-        </div>
+     
 
         {/* Drop zone */}
         <div

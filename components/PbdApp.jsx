@@ -16,16 +16,27 @@ import TetapanScreen from "@/components/screens/TetapanScreen";
 export default function PbdApp() {
   const {
     loading: dataLoading,
+    classes,
     students,
+    curriculumSets,
     curriculum,
     sessions,
     hasData,
     createClass,
+    renameClass,
+    deleteClass,
     importStudents,
+    addStudent,
+    deleteStudent,
+    deleteStudents,
     importCurriculum,
+    updateCurriculumSet,
+    deleteCurriculumSet,
     createSession,
     updateResult,
     fetchAll,
+    deleteAllClasses,
+    completeOnboarding,
   } = useSupabaseData();
 
   const [activeTab, setActiveTab] = useState("rekod");
@@ -77,6 +88,8 @@ export default function PbdApp() {
       <svg className="floral-corner floral-br" viewBox="0 0 160 160"><FloralCorner/></svg>
       <OnboardingScreen onComplete={async (importedStudents, importedCurriculum) => {
         // Data is now saved to Supabase via the onboarding screen
+        // Mark user as onboarded
+        await completeOnboarding();
         // Refresh all data
         await fetchAll();
       }} createClass={createClass} importStudents={importStudents} importCurriculum={importCurriculum}/>
@@ -123,10 +136,17 @@ export default function PbdApp() {
         <AnalisisScreen sessions={sessions} students={students}/>
       )}
       {activeTab === "laporan" && (
-        <LaporanScreen sessions={sessions} students={students}/>
+        <LaporanScreen sessions={sessions} students={students} curriculum={curriculum} classes={classes}/>
       )}
       {activeTab === "tetapan" && (
-        <TetapanScreen students={students} curriculum={curriculum}/>
+        <TetapanScreen
+          students={students} curriculum={curriculum} curriculumSets={curriculumSets} classes={classes}
+          createClass={createClass} renameClass={renameClass} deleteClass={deleteClass} deleteAllClasses={deleteAllClasses}
+          addStudent={addStudent} deleteStudent={deleteStudent} deleteStudents={deleteStudents}
+          importStudents={importStudents}
+          importCurriculum={importCurriculum} updateCurriculumSet={updateCurriculumSet}
+          deleteCurriculumSet={deleteCurriculumSet}
+        />
       )}
 
       <nav className="bottom-nav">

@@ -60,7 +60,7 @@ export default function KeyInScreen({ session, students, onUpdateResult, onFinis
         <button className="header-back" onClick={onBack}><Icons.back/></button>
         <div className="header-info">
           <div className="header-line1">{session.tarikh} · {session.kelas}</div>
-          <div className="header-line2">{session.tajuk_code} · {session.tajuk_title}</div>
+          <div className="header-line2">{session.tajuk}</div>
         </div>
         <button className="btn btn-primary btn-sm" onClick={onFinish}>Siap ✓</button>
       </div>
