@@ -5,7 +5,7 @@ import { calcStats } from "@/lib/utils";
 import {
   createBorangTransitFilename,
   downloadXLSX,
-  generateBorangTransitWorkbookFromTemplate,
+  generateMultiClassWorkbook,
 } from "@/lib/exportXLSX";
 
 export default function LaporanScreen({ sessions, students, curriculum, classes }) {
@@ -19,6 +19,12 @@ export default function LaporanScreen({ sessions, students, curriculum, classes 
   const [exportSet, setExportSet] = useState("");
   const [exportBusy, setExportBusy] = useState("");
 
+  // Derive class names from students (consistent with other screens)
+  const classNames = useMemo(
+    () => [...new Set(students.map(s => s.class_name))].sort(),
+    [students]
+  );
+
   // Derive sets from curriculum
   const curriculumSets = useMemo(() => {
     const map = new Map();
@@ -28,19 +34,20 @@ export default function LaporanScreen({ sessions, students, curriculum, classes 
     return [...map.values()];
   }, [curriculum]);
 
+  const isAllClasses = exportClass === "__all__";
+
   // Export handler
-  const buildExportPayload = () => {
-    if (!exportClass || !exportSet) return null;
+  const handleExportXLSX = async () => {
+    if (!exportClass || !exportSet) return;
 
-    const cls = classes.find(c => c.id === exportClass);
     const setObj = curriculumSets.find(s => s.id === exportSet);
-    if (!cls || !setObj) return null;
+    if (!setObj) return;
 
-    const classStudents = students
-      .filter(s => s.class_id === exportClass)
-      .sort((a, b) => a.full_name.localeCompare(b.full_name));
+    const targetClasses = isAllClasses ? classNames : [exportClass];
 
     const setItems = curriculum.filter(c => c.set_id === exportSet);
+    const setItemIds = new Set(setItems.map(i => i.id));
+
     const temaOrder = [];
     const temaMap = {};
     setItems.forEach(item => {
@@ -59,54 +66,43 @@ export default function LaporanScreen({ sessions, students, curriculum, classes 
       })),
     }));
 
-    const setItemIds = new Set(setItems.map(i => i.id));
-    const relevantSessions = sessions.filter(
-      s => s.class_id === exportClass && setItemIds.has(s.curriculum_item_id)
-    );
+    const classEntries = targetClasses.map(cn => {
+      const classStudents = students
+        .filter(s => s.class_name === cn)
+        .sort((a, b) => a.full_name.localeCompare(b.full_name));
 
-    const resultMatrix = {};
-    classStudents.forEach(s => { resultMatrix[s.id] = {}; });
+      const relevantSessions = sessions.filter(
+        s => s.kelas === cn && setItemIds.has(s.curriculum_item_id)
+      );
 
-    relevantSessions.forEach(sess => {
-      const itemId = sess.curriculum_item_id;
-      Object.entries(sess.results || {}).forEach(([studentId, tpVal]) => {
-        if (resultMatrix[studentId] && !resultMatrix[studentId][itemId]) {
-          resultMatrix[studentId][itemId] = tpVal;
-        }
+      const resultMatrix = {};
+      classStudents.forEach(s => { resultMatrix[s.id] = {}; });
+
+      relevantSessions.forEach(sess => {
+        const itemId = sess.curriculum_item_id;
+        Object.entries(sess.results || {}).forEach(([studentId, tpVal]) => {
+          if (resultMatrix[studentId] && !resultMatrix[studentId][itemId]) {
+            resultMatrix[studentId][itemId] = tpVal;
+          }
+        });
       });
+
+      return { className: cn, students: classStudents, resultMatrix };
     });
-
-    return {
-      cls,
-      setObj,
-      classStudents,
-      temaGroups,
-      resultMatrix,
-      title: `BORANG TRANSIT PBD ${setObj.name.toUpperCase()} / ${new Date().getFullYear()}`,
-      schoolName: '',
-      subjectName: setObj.name,
-      teacherName: '',
-    };
-  };
-
-  const handleExportXLSX = async () => {
-    const payload = buildExportPayload();
-    if (!payload) return;
 
     setExportBusy("xlsx");
     try {
-      const workbookBuffer = await generateBorangTransitWorkbookFromTemplate({
-        title: payload.title,
-        schoolName: payload.schoolName,
-        className: payload.cls.name,
-        subjectName: payload.subjectName,
-        teacherName: payload.teacherName,
-        students: payload.classStudents,
-        temaGroups: payload.temaGroups,
-        resultMatrix: payload.resultMatrix,
+      const workbookBuffer = await generateMultiClassWorkbook({
+        classes: classEntries,
+        temaGroups,
+        title: `BORANG TRANSIT PBD ${setObj.name.toUpperCase()} / ${new Date().getFullYear()}`,
+        schoolName: '',
+        subjectName: setObj.name,
+        teacherName: '',
       });
 
-      const filename = createBorangTransitFilename(payload.cls.name, payload.setObj.name, "xlsx");
+      const label = isAllClasses ? 'Semua_Kelas' : exportClass;
+      const filename = createBorangTransitFilename(label, setObj.name, "xlsx");
       downloadXLSX(workbookBuffer, filename);
       setShowExport(false);
     } catch (error) {
@@ -115,6 +111,17 @@ export default function LaporanScreen({ sessions, students, curriculum, classes 
       setExportBusy("");
     }
   };
+
+  // Preview counts
+  const previewStudentCount = exportClass && exportSet
+    ? (isAllClasses ? students : students.filter(s => s.class_name === exportClass)).length
+    : 0;
+  const previewTajukCount = exportSet
+    ? curriculum.filter(c => c.set_id === exportSet).length
+    : 0;
+  const previewSessionCount = exportClass && exportSet
+    ? (isAllClasses ? sessions : sessions.filter(s => s.kelas === exportClass)).length
+    : 0;
 
   const renderSesi = () => {
     if (!selectedSession) return <div className="empty-state"><div className="empty-icon">-</div><div className="empty-text">Tiada sesi</div></div>;
@@ -206,7 +213,6 @@ export default function LaporanScreen({ sessions, students, curriculum, classes 
   };
 
   const renderKelas = () => {
-    const classNames = [...new Set(students.map(s => s.class_name))];
     return (
       <div style={{ padding: "12px 16px" }}>
         {classNames.map(kelas => {
@@ -260,14 +266,15 @@ export default function LaporanScreen({ sessions, students, curriculum, classes 
             <div className="modal-handle"/>
             <div className="modal-title">Eksport Borang Transit PBD</div>
             <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600, marginBottom: 16 }}>
-              Pilih kelas dan set kurikulum untuk dijana sebagai CSV atau XLSX.
+              Pilih kelas dan set kurikulum untuk dijana sebagai XLSX.
             </div>
 
             <div className="field-group" style={{ marginBottom: 12 }}>
               <div className="field-label">Kelas</div>
               <select className="field-input" value={exportClass} onChange={e => setExportClass(e.target.value)}>
                 <option value="">-- Pilih Kelas --</option>
-                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                <option value="__all__">Semua Kelas</option>
+                {classNames.map(cn => <option key={cn} value={cn}>{cn}</option>)}
               </select>
             </div>
 
@@ -281,9 +288,9 @@ export default function LaporanScreen({ sessions, students, curriculum, classes 
 
             {exportClass && exportSet && (
               <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginBottom: 12, padding: "8px 12px", background: "var(--matcha-pale)", borderRadius: 10 }}>
-                {students.filter(s => s.class_id === exportClass).length} murid /{" "}
-                {curriculum.filter(c => c.set_id === exportSet).length} tajuk /{" "}
-                {sessions.filter(s => s.class_id === exportClass).length} sesi
+                {previewStudentCount} murid /{" "}
+                {previewTajukCount} tajuk /{" "}
+                {previewSessionCount} sesi
               </div>
             )}
 
@@ -312,4 +319,3 @@ export default function LaporanScreen({ sessions, students, curriculum, classes 
     </div>
   );
 }
-
