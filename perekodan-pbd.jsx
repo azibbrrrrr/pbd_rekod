@@ -797,11 +797,312 @@ function Snackbar({ msg, onUndo, onClose }) {
   );
 }
 
+// ─── CSV PARSER UTILITY ──────────────────────────────────────────────────────
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return { headers: [], rows: [] };
+  // Detect delimiter: comma or semicolon
+  const delim = lines[0].includes(";") ? ";" : ",";
+  const headers = lines[0].split(delim).map(h => h.trim().replace(/^["']|["']$/g, ""));
+  const rows = lines.slice(1).map(line => {
+    const cols = line.split(delim).map(c => c.trim().replace(/^["']|["']$/g, ""));
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = cols[i] || ""; });
+    return obj;
+  }).filter(row => Object.values(row).some(v => v !== ""));
+  return { headers, rows };
+}
+
+function normalizeStr(s, doNormalize) {
+  if (!doNormalize) return s;
+  return s.trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+// Detect which CSV column maps to which field (fuzzy match)
+function detectStudentCols(headers) {
+  const find = (keywords) => headers.find(h => keywords.some(k => h.toUpperCase().includes(k))) || headers[0];
+  return {
+    kelas: find(["KELAS", "CLASS", "DARJAH"]),
+    nama: find(["NAMA", "NAME", "MURID", "STUDENT"]),
+  };
+}
+function detectCurriculumCols(headers) {
+  const find = (keywords, fallback) => headers.find(h => keywords.some(k => h.toUpperCase().includes(k))) || fallback || headers[0];
+  return {
+    tema: find(["TEMA", "THEME", "TOPIK"], headers[0]),
+    tajuk: find(["TAJUK", "TAJUK PEMBELAJARAN", "LEARNING", "STANDARD"], headers[1] || headers[0]),
+  };
+}
+
+// Auto-extract code from tajuk like "1.1.1 Mengenal pasti..."
+function extractTajukCode(tajuk) {
+  const match = tajuk.match(/^(\d+(\.\d+)+)\s*/);
+  if (match) return { code: match[1], title: tajuk.slice(match[0].length).trim() };
+  return { code: "", title: tajuk.trim() };
+}
+
+// ─── EDITABLE STUDENT TABLE ──────────────────────────────────────────────────
+function EditableStudentTable({ rows, onChange }) {
+  const update = (i, field, val) => {
+    const next = rows.map((r, idx) => idx === i ? { ...r, [field]: val } : r);
+    onChange(next);
+  };
+  const addRow = () => onChange([...rows, { class_name: "", full_name: "", _status: "added" }]);
+  const removeRow = (i) => onChange(rows.filter((_, idx) => idx !== i));
+
+  // Group by class for display, but keep flat editing
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1 }}>
+          {rows.length} murid · klik sel untuk edit
+        </div>
+        <button className="btn btn-secondary btn-sm" onClick={addRow} style={{ fontSize: 11 }}>+ Tambah Baris</button>
+      </div>
+      <div style={{ border: "1.5px solid var(--border)", borderRadius: 12, overflow: "hidden", maxHeight: 340, overflowY: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "var(--strawberry-pale)", position: "sticky", top: 0, zIndex: 2 }}>
+              <th style={{ width: 32, padding: "8px 6px", fontSize: 10, fontWeight: 800, color: "var(--muted)", textAlign: "center" }}>#</th>
+              <th style={{ padding: "8px 10px", fontSize: 10, fontWeight: 800, color: "var(--muted)", textAlign: "left" }}>KELAS</th>
+              <th style={{ padding: "8px 10px", fontSize: 10, fontWeight: 800, color: "var(--muted)", textAlign: "left" }}>NAMA MURID</th>
+              <th style={{ width: 32 }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => {
+              const isError = !row.class_name || !row.full_name;
+              return (
+                <tr key={i} style={{ borderTop: "1px solid var(--border)", background: row._status === "added" ? "var(--matcha-pale)" : isError ? "#FFF5F7" : "white" }}>
+                  <td style={{ padding: "4px 6px", fontSize: 11, color: "var(--muted)", textAlign: "center", fontWeight: 700 }}>{i + 1}</td>
+                  <td style={{ padding: "4px 6px" }}>
+                    <input
+                      value={row.class_name}
+                      onChange={e => update(i, "class_name", e.target.value)}
+                      style={{ width: "100%", border: "none", outline: "none", fontSize: 13, fontWeight: 700, fontFamily: "Nunito, sans-serif", background: "transparent", color: !row.class_name ? "var(--strawberry)" : "var(--charcoal)", padding: "4px 2px" }}
+                      placeholder="Kelas…"
+                    />
+                  </td>
+                  <td style={{ padding: "4px 6px" }}>
+                    <input
+                      value={row.full_name}
+                      onChange={e => update(i, "full_name", e.target.value)}
+                      style={{ width: "100%", border: "none", outline: "none", fontSize: 13, fontWeight: 600, fontFamily: "Nunito, sans-serif", background: "transparent", color: !row.full_name ? "var(--strawberry)" : "var(--charcoal)", padding: "4px 2px" }}
+                      placeholder="Nama murid…"
+                    />
+                  </td>
+                  <td style={{ padding: "4px 6px", textAlign: "center" }}>
+                    <button onClick={() => removeRow(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, lineHeight: 1, padding: "2px 4px" }} title="Padam">×</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {rows.some(r => !r.class_name || !r.full_name) && (
+        <div style={{ marginTop: 8, fontSize: 12, color: "var(--strawberry)", fontWeight: 700 }}>
+          ⚠ Baris tanpa kelas atau nama akan diabaikan semasa import
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── EDITABLE CURRICULUM TABLE ────────────────────────────────────────────────
+function EditableCurriculumTable({ rows, onChange }) {
+  const update = (i, field, val) => {
+    const next = rows.map((r, idx) => idx === i ? { ...r, [field]: val } : r);
+    onChange(next);
+  };
+  const addRow = () => onChange([...rows, { tema: "", tajuk_code: "", tajuk_title: "", _status: "added" }]);
+  const removeRow = (i) => onChange(rows.filter((_, idx) => idx !== i));
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1 }}>
+          {rows.length} tajuk · klik sel untuk edit
+        </div>
+        <button className="btn btn-secondary btn-sm" onClick={addRow} style={{ fontSize: 11 }}>+ Tambah Baris</button>
+      </div>
+      <div style={{ border: "1.5px solid var(--border)", borderRadius: 12, overflow: "hidden", maxHeight: 360, overflowY: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "var(--strawberry-pale)", position: "sticky", top: 0, zIndex: 2 }}>
+              <th style={{ width: 28, padding: "8px 4px", fontSize: 10, fontWeight: 800, color: "var(--muted)", textAlign: "center" }}>#</th>
+              <th style={{ padding: "8px 8px", fontSize: 10, fontWeight: 800, color: "var(--muted)", textAlign: "left", width: "30%" }}>TEMA</th>
+              <th style={{ padding: "8px 8px", fontSize: 10, fontWeight: 800, color: "var(--muted)", textAlign: "left", width: "15%" }}>KOD</th>
+              <th style={{ padding: "8px 8px", fontSize: 10, fontWeight: 800, color: "var(--muted)", textAlign: "left" }}>TAJUK</th>
+              <th style={{ width: 28 }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => {
+              const isError = !row.tema || !row.tajuk_title;
+              return (
+                <tr key={i} style={{ borderTop: "1px solid var(--border)", background: row._status === "added" ? "var(--matcha-pale)" : isError ? "#FFF5F7" : "white" }}>
+                  <td style={{ padding: "4px", fontSize: 11, color: "var(--muted)", textAlign: "center", fontWeight: 700 }}>{i + 1}</td>
+                  <td style={{ padding: "4px 6px" }}>
+                    <input
+                      value={row.tema}
+                      onChange={e => update(i, "tema", e.target.value)}
+                      style={{ width: "100%", border: "none", outline: "none", fontSize: 12, fontWeight: 700, fontFamily: "Nunito, sans-serif", background: "transparent", color: !row.tema ? "var(--strawberry)" : "var(--charcoal)", padding: "4px 2px" }}
+                      placeholder="Tema…"
+                    />
+                  </td>
+                  <td style={{ padding: "4px 6px" }}>
+                    <input
+                      value={row.tajuk_code}
+                      onChange={e => update(i, "tajuk_code", e.target.value)}
+                      style={{ width: "100%", border: "none", outline: "none", fontSize: 12, fontWeight: 800, fontFamily: "Nunito, sans-serif", background: "transparent", color: "var(--strawberry)", padding: "4px 2px" }}
+                      placeholder="1.1.1"
+                    />
+                  </td>
+                  <td style={{ padding: "4px 6px" }}>
+                    <input
+                      value={row.tajuk_title}
+                      onChange={e => update(i, "tajuk_title", e.target.value)}
+                      style={{ width: "100%", border: "none", outline: "none", fontSize: 12, fontWeight: 600, fontFamily: "Nunito, sans-serif", background: "transparent", color: !row.tajuk_title ? "var(--strawberry)" : "var(--charcoal)", padding: "4px 2px" }}
+                      placeholder="Tajuk pembelajaran…"
+                    />
+                  </td>
+                  <td style={{ padding: "4px", textAlign: "center" }}>
+                    <button onClick={() => removeRow(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, lineHeight: 1, padding: "2px 4px" }} title="Padam">×</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {rows.some(r => !r.tema || !r.tajuk_title) && (
+        <div style={{ marginTop: 8, fontSize: 12, color: "var(--strawberry)", fontWeight: 700 }}>
+          ⚠ Baris tanpa tema atau tajuk akan diabaikan semasa import
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ONBOARDING ───────────────────────────────────────────────────────────────
 function OnboardingScreen({ onComplete }) {
   const [step, setStep] = useState(0);
-  const [csvPreview, setCsvPreview] = useState(null);
 
+  // Step 1 — Students state
+  const [studentRows, setStudentRows] = useState([]);
+  const [studentError, setStudentError] = useState("");
+  const [trimCaps, setTrimCaps] = useState(true);
+  const [importSummary, setImportSummary] = useState(null); // { added, skipped, errors }
+  const studentFileRef = useRef();
+
+  // Step 2 — Curriculum state
+  const [curriculumRows, setCurriculumRows] = useState([]);
+  const [curriculumError, setCurriculumError] = useState("");
+  const [setName, setSetName] = useState("RBT Tahun 3 2026");
+  const [autoSplitCode, setAutoSplitCode] = useState(true);
+  const [currSummary, setCurrSummary] = useState(null);
+  const currFileRef = useRef();
+
+  // ── CSV reading helpers ──────────────────────────────────────────────────
+  const readFile = (file) => new Promise((res, rej) => {
+    const reader = new FileReader();
+    reader.onload = e => res(e.target.result);
+    reader.onerror = () => rej(new Error("Gagal membaca fail"));
+    reader.readAsText(file, "UTF-8");
+  });
+
+  // ── Step 1: handle student CSV ───────────────────────────────────────────
+  const handleStudentCSV = async (file) => {
+    if (!file) return;
+    setStudentError("");
+    setImportSummary(null);
+    try {
+      const text = await readFile(file);
+      const { headers, rows } = parseCSV(text);
+      if (rows.length === 0) { setStudentError("Fail CSV kosong atau format tidak dikenali."); return; }
+      const cols = detectStudentCols(headers);
+      const seen = new Set();
+      let added = 0, skipped = 0, errors = 0;
+      const parsed = [];
+      rows.forEach((row, i) => {
+        let kelas = row[cols.kelas] || "";
+        let nama = row[cols.nama] || "";
+        if (trimCaps) { kelas = normalizeStr(kelas, true); nama = nama.trim().replace(/\s+/g, " "); }
+        if (!kelas || !nama) { errors++; return; }
+        const key = `${kelas}||${nama.toUpperCase()}`;
+        if (seen.has(key)) { skipped++; return; }
+        seen.add(key);
+        parsed.push({ class_name: kelas, full_name: nama });
+        added++;
+      });
+      setStudentRows(parsed);
+      setImportSummary({ added, skipped, errors });
+    } catch (e) {
+      setStudentError("Ralat membaca fail: " + e.message);
+    }
+  };
+
+  // ── Step 2: handle curriculum CSV ───────────────────────────────────────
+  const handleCurriculumCSV = async (file) => {
+    if (!file) return;
+    setCurriculumError("");
+    setCurrSummary(null);
+    try {
+      const text = await readFile(file);
+      const { headers, rows } = parseCSV(text);
+      if (rows.length === 0) { setCurriculumError("Fail CSV kosong atau format tidak dikenali."); return; }
+      const cols = detectCurriculumCols(headers);
+      let added = 0, errors = 0;
+      const parsed = [];
+      rows.forEach(row => {
+        const tema = (row[cols.tema] || "").trim();
+        const tajukRaw = (row[cols.tajuk] || "").trim();
+        if (!tema || !tajukRaw) { errors++; return; }
+        let tajuk_code = "";
+        let tajuk_title = tajukRaw;
+        if (autoSplitCode) {
+          const extracted = extractTajukCode(tajukRaw);
+          tajuk_code = extracted.code;
+          tajuk_title = extracted.title || tajukRaw;
+        }
+        parsed.push({ tema, tajuk_code, tajuk_title });
+        added++;
+      });
+      setCurriculumRows(parsed);
+      setCurrSummary({ added, errors });
+    } catch (e) {
+      setCurriculumError("Ralat membaca fail: " + e.message);
+    }
+  };
+
+  // ── Drag-and-drop helpers ────────────────────────────────────────────────
+  const onDropStudent = (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) handleStudentCSV(file);
+  };
+  const onDropCurr = (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) handleCurriculumCSV(file);
+  };
+
+  // ── Finalize: validate + pass data up ────────────────────────────────────
+  const finalize = () => {
+    const validStudents = studentRows
+      .filter(r => r.class_name && r.full_name)
+      .map((r, i) => ({ id: i + 1, class_name: r.class_name, full_name: r.full_name }));
+    const validCurriculum = curriculumRows
+      .filter(r => r.tema && r.tajuk_title)
+      .map((r, i) => ({ id: i + 1, set_name: setName || "Set Kurikulum", ...r }));
+    onComplete(
+      validStudents.length ? validStudents : null,
+      validCurriculum.length ? validCurriculum : null
+    );
+  };
+
+  // ── STEP 0: Welcome ───────────────────────────────────────────────────────
   if (step === 0) return (
     <div className="screen" style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "var(--cream)" }}>
       <div className="onboard-hero" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
@@ -814,85 +1115,225 @@ function OnboardingScreen({ onComplete }) {
       </div>
       <div style={{ padding: "0 24px 40px", display: "flex", flexDirection: "column", gap: 10 }}>
         <button className="btn btn-primary btn-full" onClick={() => setStep(1)}>Mula →</button>
-        <button className="btn btn-ghost btn-full" onClick={onComplete}>Import data kemudian</button>
+        <button className="btn btn-ghost btn-full" onClick={() => onComplete(null, null)}>Guna data contoh & langkau</button>
       </div>
     </div>
   );
 
-  if (step === 1) return (
-    <div className="screen">
-      <div className="page-header">
-        <div className="page-title">Import Murid</div>
-        <div className="page-subtitle">Langkah 1 daripada 2</div>
-      </div>
-      <div style={{ padding: "16px" }}>
-        <div className="card">
-          <div className="card-title">Import Senarai Murid (CSV)</div>
-          <div className="drop-zone" onClick={() => {
-            setCsvPreview(SEED_STUDENTS.slice(0, 5));
-          }}>
-            <div className="drop-icon">📂</div>
-            <div className="drop-text">Klik untuk muat naik CSV</div>
-            <div className="drop-hint">Format: KELAS, NAMA MURID</div>
+  // ── STEP 1: Import Students ───────────────────────────────────────────────
+  if (step === 1) {
+    const validCount = studentRows.filter(r => r.class_name && r.full_name).length;
+    const canProceed = validCount > 0;
+
+    return (
+      <div className="screen" style={{ paddingBottom: 20 }}>
+        <div className="page-header">
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="header-back" onClick={() => setStep(0)}><Icons.back/></button>
+            <div>
+              <div className="page-title">Import Murid</div>
+              <div className="page-subtitle">Langkah 1 daripada 2</div>
+            </div>
           </div>
-          {csvPreview && (
-            <div style={{ marginTop: 14 }}>
-              <div className="card-title" style={{ marginBottom: 8 }}>Pratonton (5 baris)</div>
-              <table className="data-table" style={{ fontSize: 12 }}>
-                <thead><tr><th>KELAS</th><th>NAMA MURID</th></tr></thead>
-                <tbody>{csvPreview.map((s, i) => (
-                  <tr key={i}><td>{s.class_name}</td><td>{s.full_name}</td></tr>
-                ))}</tbody>
-              </table>
-              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
-                <input type="checkbox" id="trim" defaultChecked/>
-                <label htmlFor="trim" style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>Trim spaces / normalize caps</label>
+        </div>
+
+        <div style={{ padding: "14px 16px 0" }}>
+          {/* Drop zone */}
+          <div
+            className="drop-zone"
+            onDragOver={e => e.preventDefault()}
+            onDrop={onDropStudent}
+            onClick={() => studentFileRef.current.click()}
+          >
+            <div className="drop-icon">📂</div>
+            <div className="drop-text">Klik atau seret fail CSV murid</div>
+            <div className="drop-hint">Format: KELAS, NAMA MURID (header diperlukan)</div>
+            <input
+              ref={studentFileRef}
+              type="file"
+              accept=".csv,.txt"
+              style={{ display: "none" }}
+              onChange={e => handleStudentCSV(e.target.files[0])}
+            />
+          </div>
+
+          {/* Options */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+            <input type="checkbox" id="trimCaps" checked={trimCaps} onChange={e => setTrimCaps(e.target.checked)} style={{ accentColor: "var(--strawberry)", width: 16, height: 16 }}/>
+            <label htmlFor="trimCaps" style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)", cursor: "pointer" }}>Trim spaces & capitalize kelas</label>
+          </div>
+
+          {/* Error */}
+          {studentError && (
+            <div style={{ marginTop: 10, padding: "10px 14px", background: "#FFF0F3", border: "1.5px solid var(--strawberry-light)", borderRadius: 10, fontSize: 13, fontWeight: 700, color: "var(--strawberry)" }}>
+              ⚠ {studentError}
+            </div>
+          )}
+
+          {/* Import summary badge */}
+          {importSummary && (
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span className="pill pill-green">✓ {importSummary.added} ditambah</span>
+              {importSummary.skipped > 0 && <span className="pill pill-gray">⟳ {importSummary.skipped} duplikat dilangkau</span>}
+              {importSummary.errors > 0 && <span className="pill" style={{ background: "#FFEDF1", color: "var(--strawberry)" }}>⚠ {importSummary.errors} baris ralat</span>}
+            </div>
+          )}
+
+          {/* Sample format hint */}
+          {studentRows.length === 0 && (
+            <div className="card" style={{ marginTop: 14, marginLeft: 0, marginRight: 0 }}>
+              <div className="card-title">Format CSV</div>
+              <div style={{ fontFamily: "monospace", fontSize: 12, background: "var(--strawberry-pale)", padding: "10px 12px", borderRadius: 8, lineHeight: 1.8, color: "var(--charcoal)" }}>
+                KELAS,NAMA MURID<br/>
+                3 AMETHYST,Ahmad Faris bin Aziz<br/>
+                3 AMETHYST,Siti Nur Aisyah<br/>
+                3 RUBY,Alya Sofea
+              </div>
+              <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>
+                Header boleh dalam Bahasa Melayu atau Inggeris. Pemisah: koma (,) atau titik koma (;).
               </div>
             </div>
           )}
+
+          {/* Editable table */}
+          {studentRows.length > 0 && (
+            <EditableStudentTable rows={studentRows} onChange={setStudentRows} />
+          )}
+
+          {/* Use sample data */}
+          {studentRows.length === 0 && (
+            <div style={{ textAlign: "center", margin: "14px 0 4px" }}>
+              <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>— atau —</span>
+            </div>
+          )}
+          {studentRows.length === 0 && (
+            <button className="btn btn-secondary btn-full" style={{ marginBottom: 4 }} onClick={() => {
+              setStudentRows(SEED_STUDENTS.map(s => ({ ...s })));
+              setImportSummary({ added: SEED_STUDENTS.length, skipped: 0, errors: 0 });
+            }}>
+              📋 Guna Data Contoh (16 murid)
+            </button>
+          )}
         </div>
-        <div style={{ margin: "10px 0" }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", fontWeight: 600 }}>
-            — atau gunakan data contoh —
-          </div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <button className="btn btn-primary btn-full" onClick={() => setStep(2)}>
-            Import & Seterusnya →
+
+        {/* Sticky footer */}
+        <div style={{ position: "sticky", bottom: 0, background: "white", borderTop: "1.5px solid var(--border)", padding: "12px 16px", marginTop: 16, display: "flex", gap: 10 }}>
+          <button className="btn btn-primary" style={{ flex: 2 }} disabled={!canProceed} onClick={() => setStep(2)}>
+            Seterusnya → {canProceed ? `(${validCount} murid)` : ""}
           </button>
-          <button className="btn btn-secondary btn-full" onClick={() => setStep(2)}>
-            Guna Data Contoh
-          </button>
+          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setStep(2)}>Langkau</button>
         </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  // ── STEP 2: Import Curriculum ─────────────────────────────────────────────
+  const validCurrCount = curriculumRows.filter(r => r.tema && r.tajuk_title).length;
 
   return (
-    <div className="screen">
+    <div className="screen" style={{ paddingBottom: 20 }}>
       <div className="page-header">
-        <div className="page-title">Import Kurikulum</div>
-        <div className="page-subtitle">Langkah 2 daripada 2</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button className="header-back" onClick={() => setStep(1)}><Icons.back/></button>
+          <div>
+            <div className="page-title">Import Kurikulum</div>
+            <div className="page-subtitle">Langkah 2 daripada 2</div>
+          </div>
+        </div>
       </div>
-      <div style={{ padding: "16px" }}>
-        <div className="card">
-          <div className="card-title">Import Tema/Tajuk (CSV)</div>
-          <div className="drop-zone" onClick={() => {}}>
-            <div className="drop-icon">📋</div>
-            <div className="drop-text">Klik untuk muat naik CSV</div>
-            <div className="drop-hint">Format: TEMA, TAJUK</div>
-          </div>
-          <div className="field-group" style={{ marginTop: 14 }}>
-            <div className="field-label">Nama Set Kurikulum</div>
-            <input className="field-input" defaultValue="RBT Tahun 3 2026" placeholder="cth. RBT Tahun 3 2026"/>
-          </div>
+
+      <div style={{ padding: "14px 16px 0" }}>
+        {/* Set name */}
+        <div className="field-group">
+          <div className="field-label">Nama Set Kurikulum</div>
+          <input className="field-input" value={setName} onChange={e => setSetName(e.target.value)} placeholder="cth. RBT Tahun 3 2026"/>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 4 }}>
-          <button className="btn btn-green btn-full" onClick={onComplete}>
-            Selesai — Pergi Rekod ✓
-          </button>
-          <button className="btn btn-ghost btn-full" onClick={onComplete}>Langkau</button>
+
+        {/* Options */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <input type="checkbox" id="autoCode" checked={autoSplitCode} onChange={e => setAutoSplitCode(e.target.checked)} style={{ accentColor: "var(--strawberry)", width: 16, height: 16 }}/>
+          <label htmlFor="autoCode" style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)", cursor: "pointer" }}>
+            Auto-extract kod dari tajuk (cth. "1.1.1 Mengenal pasti…" → kod: 1.1.1)
+          </label>
         </div>
+
+        {/* Drop zone */}
+        <div
+          className="drop-zone"
+          onDragOver={e => e.preventDefault()}
+          onDrop={onDropCurr}
+          onClick={() => currFileRef.current.click()}
+        >
+          <div className="drop-icon">📋</div>
+          <div className="drop-text">Klik atau seret fail CSV kurikulum</div>
+          <div className="drop-hint">Format: TEMA, TAJUK</div>
+          <input
+            ref={currFileRef}
+            type="file"
+            accept=".csv,.txt"
+            style={{ display: "none" }}
+            onChange={e => handleCurriculumCSV(e.target.files[0])}
+          />
+        </div>
+
+        {/* Error */}
+        {curriculumError && (
+          <div style={{ marginTop: 10, padding: "10px 14px", background: "#FFF0F3", border: "1.5px solid var(--strawberry-light)", borderRadius: 10, fontSize: 13, fontWeight: 700, color: "var(--strawberry)" }}>
+            ⚠ {curriculumError}
+          </div>
+        )}
+
+        {/* Summary */}
+        {currSummary && (
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <span className="pill pill-green">✓ {currSummary.added} tajuk ditambah</span>
+            {currSummary.errors > 0 && <span className="pill" style={{ background: "#FFEDF1", color: "var(--strawberry)" }}>⚠ {currSummary.errors} baris ralat</span>}
+          </div>
+        )}
+
+        {/* Sample format */}
+        {curriculumRows.length === 0 && (
+          <div className="card" style={{ marginTop: 14, marginLeft: 0, marginRight: 0 }}>
+            <div className="card-title">Format CSV</div>
+            <div style={{ fontFamily: "monospace", fontSize: 12, background: "var(--strawberry-pale)", padding: "10px 12px", borderRadius: 8, lineHeight: 1.8, color: "var(--charcoal)" }}>
+              TEMA,TAJUK<br/>
+              1.0 Reka Bentuk & Teknologi,1.1.1 Mengenal pasti keperluan<br/>
+              1.0 Reka Bentuk & Teknologi,1.1.2 Mengenal pasti masalah<br/>
+              2.0 Teknologi Pertanian,2.1.1 Jenis-jenis tanaman
+            </div>
+            <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>
+              Kod tajuk (1.1.1) boleh disertakan terus dalam lajur TAJUK — ia akan diasingkan secara automatik jika "Auto-extract kod" diaktifkan.
+            </div>
+          </div>
+        )}
+
+        {/* Editable curriculum table */}
+        {curriculumRows.length > 0 && (
+          <EditableCurriculumTable rows={curriculumRows} onChange={setCurriculumRows} />
+        )}
+
+        {/* Use sample */}
+        {curriculumRows.length === 0 && (
+          <>
+            <div style={{ textAlign: "center", margin: "14px 0 4px" }}>
+              <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>— atau —</span>
+            </div>
+            <button className="btn btn-secondary btn-full" style={{ marginBottom: 4 }} onClick={() => {
+              setCurriculumRows(SEED_CURRICULUM.map(c => ({ ...c })));
+              setCurrSummary({ added: SEED_CURRICULUM.length, errors: 0 });
+            }}>
+              📋 Guna Data Contoh (6 tajuk)
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Sticky footer */}
+      <div style={{ position: "sticky", bottom: 0, background: "white", borderTop: "1.5px solid var(--border)", padding: "12px 16px", marginTop: 16, display: "flex", gap: 10 }}>
+        <button className="btn btn-green" style={{ flex: 2 }} onClick={finalize}>
+          Selesai — Pergi Rekod ✓ {validCurrCount > 0 ? `(${validCurrCount} tajuk)` : ""}
+        </button>
+        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => onComplete(null, null)}>Langkau</button>
       </div>
     </div>
   );
@@ -1655,8 +2096,8 @@ export default function App() {
   const [onboarded, setOnboarded] = useState(false);
   const [activeTab, setActiveTab] = useState("rekod");
   const [sessions, setSessions] = useState(SEED_SESSIONS);
-  const [students] = useState(SEED_STUDENTS);
-  const [curriculum] = useState(SEED_CURRICULUM);
+  const [students, setStudents] = useState(SEED_STUDENTS);
+  const [curriculum, setCurriculum] = useState(SEED_CURRICULUM);
   const [view, setView] = useState("home"); // home | create | keyin | review
   const [activeSession, setActiveSession] = useState(null);
 
@@ -1700,7 +2141,13 @@ export default function App() {
       <div className="app-wrapper">
         <svg className="floral-corner floral-tl" viewBox="0 0 160 160"><FloralCorner/></svg>
         <svg className="floral-corner floral-br" viewBox="0 0 160 160"><FloralCorner/></svg>
-        <OnboardingScreen onComplete={() => setOnboarded(true)}/>
+        <OnboardingScreen onComplete={(importedStudents, importedCurriculum) => {
+          if (importedStudents) setStudents(importedStudents);
+          if (importedCurriculum) setCurriculum(importedCurriculum);
+          // Reset sessions since student IDs may have changed
+          if (importedStudents) setSessions([]);
+          setOnboarded(true);
+        }}/>
       </div>
     </>
   );
