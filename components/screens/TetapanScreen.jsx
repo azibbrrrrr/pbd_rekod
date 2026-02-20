@@ -80,6 +80,8 @@ function curriculumToRows(items) {
   }));
 }
 
+const normClass = (s) => s.trim().toLowerCase();
+
 // ─── STUDENTS SECTION ────────────────────────────────────────────────────────
 function StudentsSection({
   students, classes,
@@ -125,14 +127,14 @@ function StudentsSection({
     // New rows: no _id — group by class first so each class is created once
     const newRows = validRows.filter(r => !r._id);
     if (newRows.length > 0) {
-      const byClass = {};
+      const byClass = new Map();
       newRows.forEach(row => {
-        const key = row.class_name.trim().toLowerCase();
-        if (!byClass[key]) byClass[key] = { displayName: row.class_name.trim(), names: [] };
-        byClass[key].names.push(row.full_name.trim());
+        const key = normClass(row.class_name);
+        if (!byClass.has(key)) byClass.set(key, { displayName: row.class_name.trim(), names: [] });
+        byClass.get(key).names.push(row.full_name.trim());
       });
-      for (const { displayName, names } of Object.values(byClass)) {
-        let cls = classes.find(c => c.name.trim().toLowerCase() === displayName.toLowerCase());
+      for (const { displayName, names } of byClass.values()) {
+        let cls = classes.find(c => normClass(c.name) === normClass(displayName));
         if (!cls) cls = await createClass(displayName);
         await importStudents(cls.id, names);
       }
