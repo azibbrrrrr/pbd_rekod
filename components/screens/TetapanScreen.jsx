@@ -62,12 +62,14 @@ function Modal({ title, children, onClose }) {
   );
 }
 
-// Convert flat students + classes into editable rows (class_name, full_name)
-function studentsToRows(students, classes) {
-  return students.map(s => {
-    const cls = classes.find(c => c.id === s.class_id);
-    return { _id: s.id, class_name: cls?.name || "", full_name: s.full_name, _status: "saved" };
+// Group students into per-class row maps { classId: [{_id, full_name, _status}] }
+function buildClassRows(students) {
+  const map = {};
+  students.forEach(s => {
+    if (!map[s.class_id]) map[s.class_id] = [];
+    map[s.class_id].push({ _id: s.id, full_name: s.full_name, _status: "saved" });
   });
+  return map;
 }
 
 // Convert curriculum items into editable rows
@@ -82,6 +84,9 @@ function curriculumToRows(items) {
 
 const normClass = (s) => s.trim().toLowerCase();
 
+const TEMP_PREFIX = "__new__";
+const tempId = (name) => `${TEMP_PREFIX}${normClass(name)}`;
+
 // ─── STUDENTS SECTION ────────────────────────────────────────────────────────
 function StudentsSection({
   students, classes,
@@ -93,18 +98,48 @@ function StudentsSection({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [addClassModal, setAddClassModal] = useState(false);
+  const [newClassName, setNewClassName] = useState("");
 
-  // Editable table rows — mirrors current students+classes
-  const [rows, setRows] = useState(() => studentsToRows(students, classes));
-  const [original, setOriginal] = useState(() => studentsToRows(students, classes));
+  // Per-class rows: { classId | tempId → [{_id?, full_name, _status}] }
+  const [rowsByClass, setRowsByClass] = useState(() => buildClassRows(students));
+  const [originalByClass, setOriginalByClass] = useState(() => buildClassRows(students));
 
-  const isDirty = JSON.stringify(rows) !== JSON.stringify(original);
+  // Pending classes: new classes from CSV not yet in DB { tempId → displayName }
+  const [pendingClasses, setPendingClasses] = useState({});
 
+  // Active tab — real class id or tempId
+  const [activeClassId, setActiveClassId] = useState(() => classes[0]?.id || null);
+
+  // All tabs = real classes + pending classes
+  const allTabs = [
+    ...classes,
+    ...Object.entries(pendingClasses).map(([id, name]) => ({ id, name, isPending: true })),
+  ];
+
+  // Re-sync when students change (NOT when classes change — avoids wiping pending tabs)
   useEffect(() => {
-    const fresh = studentsToRows(students, classes);
-    setRows(fresh);
-    setOriginal(fresh);
-  }, [students, classes]);
+    const fresh = buildClassRows(students);
+    setRowsByClass(prev => {
+      // Preserve pending tab rows; only reset real class rows
+      const pending = Object.fromEntries(
+        Object.entries(prev).filter(([id]) => id.startsWith(TEMP_PREFIX))
+      );
+      return { ...fresh, ...pending };
+    });
+    setOriginalByClass(prev => {
+      const pending = Object.fromEntries(
+        Object.entries(prev).filter(([id]) => id.startsWith(TEMP_PREFIX))
+      );
+      return { ...fresh, ...pending };
+    });
+    // Set initial active tab if none selected
+    setActiveClassId(prev => prev ?? (classes[0]?.id || null));
+  }, [students]);
+
+  const activeRows = rowsByClass[activeClassId] || [];
+  const activeOriginal = originalByClass[activeClassId] || [];
+  const isDirty = activeClassId && JSON.stringify(activeRows) !== JSON.stringify(activeOriginal);
 
   const wrap = async (fn) => {
     setBusy(true); setErr("");
@@ -113,116 +148,258 @@ function StudentsSection({
     finally { setBusy(false); }
   };
 
-  const handleUndo = () => setRows(original);
+  const handleUndo = () => setRowsByClass(prev => ({ ...prev, [activeClassId]: activeOriginal }));
 
-  // Diff and sync rows → Supabase
+  // Save active class tab
   const handleSave = () => wrap(async () => {
-    const validRows = rows.filter(r => r.class_name.trim() && r.full_name.trim());
+    const validRows = activeRows.filter(r => r.full_name?.trim());
 
-    // Deleted rows: original has _id that new rows don't
-    const currentIds = new Set(validRows.filter(r => r._id).map(r => r._id));
-    const deletedIds = original.filter(r => r._id && !currentIds.has(r._id)).map(r => r._id);
-    if (deletedIds.length > 0) await deleteStudents(deletedIds);
-
-    // New rows: no _id — group by class first so each class is created once
-    const newRows = validRows.filter(r => !r._id);
-    if (newRows.length > 0) {
-      const byClass = new Map();
-      newRows.forEach(row => {
-        const key = normClass(row.class_name);
-        if (!byClass.has(key)) byClass.set(key, { displayName: row.class_name.trim(), names: [] });
-        byClass.get(key).names.push(row.full_name.trim());
+    // Resolve class ID — create if pending
+    let classId = activeClassId;
+    if (activeClassId.startsWith(TEMP_PREFIX)) {
+      const name = pendingClasses[activeClassId];
+      const cls = await createClass(name);
+      classId = cls.id;
+      // Promote temp → real
+      setRowsByClass(prev => {
+        const next = { ...prev, [cls.id]: prev[activeClassId] };
+        delete next[activeClassId];
+        return next;
       });
-      for (const { displayName, names } of byClass.values()) {
-        let cls = classes.find(c => normClass(c.name) === normClass(displayName));
-        if (!cls) cls = await createClass(displayName);
-        await importStudents(cls.id, names);
-      }
+      setOriginalByClass(prev => {
+        const next = { ...prev, [cls.id]: [] };
+        delete next[activeClassId];
+        return next;
+      });
+      setPendingClasses(prev => {
+        const next = { ...prev };
+        delete next[activeClassId];
+        return next;
+      });
+      setActiveClassId(cls.id);
     }
 
-    // Renamed students (same _id, different full_name) — no rename API exists, skip for now
-    // Renamed class is handled by class rename action elsewhere
+    // Deleted students
+    const currentIds = new Set(validRows.filter(r => r._id).map(r => r._id));
+    const deletedIds = activeOriginal.filter(r => r._id && !currentIds.has(r._id)).map(r => r._id);
+    if (deletedIds.length > 0) await deleteStudents(deletedIds);
 
-    setOriginal(rows);
+    // New students
+    const newNames = validRows.filter(r => !r._id).map(r => r.full_name.trim());
+    if (newNames.length > 0) await importStudents(classId, newNames);
+
+    setOriginalByClass(prev => ({ ...prev, [classId]: validRows }));
   });
 
+  // CSV import: KELAS + NAMA MURID — distributes rows to correct tabs
   const handleImportCSV = async (file) => {
     try {
+      setErr("");
       const text = await readFile(file);
       const { headers, rows: csvRows } = parseCSV(text);
       const check = validateStudentCSVFormat(headers, { requireClass: true });
       if (!check.valid) { setErr(check.error); return; }
+
       const imported = csvRows
         .map(r => ({
-          class_name: (r[check.columns.kelas] || "").trim().toUpperCase(),
+          className: (r[check.columns.kelas] || "").trim().toUpperCase(),
           full_name: (r[check.columns.nama] || "").trim().toUpperCase(),
-          _status: "added",
         }))
-        .filter(r => r.class_name && r.full_name);
-      setRows(prev => [...prev, ...imported]);
+        .filter(r => r.className && r.full_name);
+
+      // Group by class name
+      const byClass = new Map();
+      imported.forEach(({ className, full_name }) => {
+        const key = normClass(className);
+        if (!byClass.has(key)) byClass.set(key, { displayName: className, names: [] });
+        byClass.get(key).names.push(full_name);
+      });
+
+      const newRowsByClass = {};
+      const newPending = {};
+
+      byClass.forEach(({ displayName, names }, key) => {
+        const existingCls = classes.find(c => normClass(c.name) === key);
+        const id = existingCls
+          ? existingCls.id
+          : tempId(displayName);
+        if (!existingCls) newPending[id] = displayName;
+        newRowsByClass[id] = [
+          ...(rowsByClass[id] || []),
+          ...names.map(n => ({ full_name: n, _status: "added" })),
+        ];
+      });
+
+      setRowsByClass(prev => ({ ...prev, ...newRowsByClass }));
+      setPendingClasses(prev => ({ ...prev, ...newPending }));
+
+      // Switch to first imported class tab
+      const [[firstKey, firstEntry]] = byClass.entries();
+      const firstExisting = classes.find(c => normClass(c.name) === firstKey);
+      const firstId = firstExisting ? firstExisting.id : tempId(firstEntry.displayName);
+      setActiveClassId(firstId);
     } catch (e) { setErr(e.message); }
   };
 
-  const confirmAction = () => wrap(async () => {
-    if (confirmDelete?.type === "all_classes") await deleteAllClasses();
-    else if (confirmDelete?.type === "class") await deleteClass(confirmDelete.id);
+  // Add new class immediately (real DB call)
+  const handleAddClass = () => wrap(async () => {
+    const name = newClassName.trim();
+    if (!name) return;
+    if (classes.some(c => normClass(c.name) === normClass(name)))
+      throw new Error(`Kelas "${name}" sudah wujud.`);
+    if (Object.values(pendingClasses).some(n => normClass(n) === normClass(name)))
+      throw new Error(`Kelas "${name}" sudah wujud (belum disimpan).`);
+    const cls = await createClass(name);
+    setRowsByClass(prev => ({ ...prev, [cls.id]: [] }));
+    setOriginalByClass(prev => ({ ...prev, [cls.id]: [] }));
+    setActiveClassId(cls.id);
+    setAddClassModal(false);
+    setNewClassName("");
+  });
+
+  // Delete active class
+  const handleDeleteClass = () => wrap(async () => {
+    const id = confirmDelete.id;
+    if (id.startsWith(TEMP_PREFIX)) {
+      // Pending tab — just remove locally
+      setPendingClasses(prev => { const n = { ...prev }; delete n[id]; return n; });
+      setRowsByClass(prev => { const n = { ...prev }; delete n[id]; return n; });
+      setOriginalByClass(prev => { const n = { ...prev }; delete n[id]; return n; });
+    } else {
+      await deleteClass(id);
+    }
+    const remaining = allTabs.filter(t => t.id !== id);
+    setActiveClassId(remaining[0]?.id || null);
+    setConfirmDelete(null);
+  });
+
+  // Delete all classes
+  const handleDeleteAll = () => wrap(async () => {
+    await deleteAllClasses();
+    setPendingClasses({});
+    setRowsByClass({});
+    setOriginalByClass({});
+    setActiveClassId(null);
     setConfirmDelete(null);
   });
 
   const csvRef = useRef();
+  const activeTabName = allTabs.find(t => t.id === activeClassId)?.name || "";
 
   return (
     <div className="screen" style={{ paddingBottom: 20 }}>
-      {/* Sticky header with Save/Undo */}
+      {/* Sticky header */}
       <div className="header-bar sticky-top">
         <button className="header-back" onClick={onBack}><Icons.back/></button>
         <div className="header-info">
           <div className="header-line1">Murid &amp; Kelas</div>
-          <div className="header-line2">{students.length} murid · {classes.length} kelas</div>
+          <div className="header-line2">{students.length} murid · {allTabs.length} kelas</div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {isDirty && (
             <button className="btn btn-ghost btn-sm" style={{ fontSize: 12 }} onClick={handleUndo} disabled={busy}>↩ Batal</button>
           )}
-          <button className="btn btn-primary btn-sm"
-            style={{ background: isDirty ? undefined : "var(--muted)", opacity: isDirty ? 1 : 0.5, cursor: isDirty ? "pointer" : "default" }}
-            onClick={isDirty ? handleSave : undefined} disabled={busy || !isDirty}>
-            {busy ? "Menyimpan…" : "💾 Simpan"}
-          </button>
-          {classes.length > 0 && (
-            <button className="btn btn-ghost btn-sm" style={{ color: "var(--strawberry)", fontSize: 11 }}
-              onClick={() => setConfirmDelete({ type: "all_classes", label: "SEMUA KELAS" })}>
-              🗑 Semua
+          {activeClassId && (
+            <button className="btn btn-primary btn-sm"
+              style={{ background: isDirty ? undefined : "var(--muted)", opacity: isDirty ? 1 : 0.5, cursor: isDirty ? "pointer" : "default" }}
+              onClick={isDirty ? handleSave : undefined} disabled={busy || !isDirty}>
+              {busy ? "Menyimpan…" : "💾 Simpan"}
             </button>
           )}
+          <button className="btn btn-secondary btn-sm" onClick={() => { setErr(""); setAddClassModal(true); }}>+ Kelas</button>
         </div>
       </div>
 
       <div style={{ padding: "0 16px 16px" }}>
-        {/* CSV import strip */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-          <button className="btn btn-secondary btn-sm" onClick={() => csvRef.current?.click()}>⬆ Import CSV</button>
-          <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>Format: KELAS, NAMA MURID</span>
-          <input ref={csvRef} type="file" accept=".csv,.txt" style={{ display: "none" }}
-            onChange={e => { handleImportCSV(e.target.files[0]); e.target.value = ""; }}/>
-        </div>
+        {/* Class tabs */}
+        {allTabs.length > 0 && (
+          <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 8, marginBottom: 8 }}>
+            {allTabs.map(tab => (
+              <button key={tab.id}
+                onClick={() => setActiveClassId(tab.id)}
+                style={{
+                  flexShrink: 0, padding: "6px 14px", borderRadius: 20,
+                  fontSize: 12, fontWeight: 700, cursor: "pointer",
+                  border: activeClassId === tab.id ? "2px solid var(--strawberry)" : "2px solid var(--border)",
+                  background: activeClassId === tab.id ? "var(--strawberry-pale)" : "var(--bg-subtle)",
+                  color: activeClassId === tab.id ? "var(--strawberry)" : "var(--charcoal)",
+                }}>
+                {tab.name}{tab.isPending ? " *" : ""}
+              </button>
+            ))}
+          </div>
+        )}
 
-        {err && <div style={{ fontSize: 12, color: "var(--strawberry)", fontWeight: 700, marginBottom: 8 }}>⚠ {err}</div>}
+        {activeClassId && (
+          <>
+            {/* CSV import + delete class strip */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => csvRef.current?.click()}>⬆ Import CSV</button>
+              <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600, flex: 1 }}>Format: KELAS, NAMA MURID</span>
+              <button className="btn btn-ghost btn-sm" style={{ color: "var(--strawberry)", fontSize: 11 }}
+                onClick={() => setConfirmDelete({ id: activeClassId, label: `kelas "${activeTabName}"` })}>
+                🗑 Padam Kelas
+              </button>
+              <input ref={csvRef} type="file" accept=".csv,.txt" style={{ display: "none" }}
+                onChange={e => { handleImportCSV(e.target.files[0]); e.target.value = ""; }}/>
+            </div>
 
-        <EditableStudentTable rows={rows} onChange={setRows}/>
+            {err && <div style={{ fontSize: 12, color: "var(--strawberry)", fontWeight: 700, marginBottom: 8 }}>⚠ {err}</div>}
 
-        {isDirty && (
-          <div style={{ marginTop: 12, padding: "10px 14px", background: "var(--matcha-pale)", borderRadius: 10, fontSize: 12, fontWeight: 700, color: "var(--matcha-dark)" }}>
-            ✏ Ada perubahan yang belum disimpan. Tekan Simpan untuk mengemaskini data.
+            <EditableStudentTable rows={activeRows} onChange={next => setRowsByClass(prev => ({ ...prev, [activeClassId]: next }))}/>
+
+            {isDirty && (
+              <div style={{ marginTop: 12, padding: "10px 14px", background: "var(--matcha-pale)", borderRadius: 10, fontSize: 12, fontWeight: 700, color: "var(--matcha-dark)" }}>
+                ✏ Ada perubahan yang belum disimpan. Tekan Simpan untuk mengemaskini data.
+              </div>
+            )}
+          </>
+        )}
+
+        {allTabs.length === 0 && (
+          <div className="empty-state">
+            <div className="empty-icon">👨‍🎓</div>
+            <div className="empty-text">Tiada kelas. Tambah kelas baru atau import CSV.</div>
+          </div>
+        )}
+
+        {/* Delete all shortcut (only shown when no active class selected and classes exist) */}
+        {allTabs.length > 0 && (
+          <div style={{ marginTop: 16, textAlign: "center" }}>
+            <button className="btn btn-ghost btn-sm" style={{ color: "var(--strawberry)", fontSize: 11 }}
+              onClick={() => setConfirmDelete({ id: "__all__", label: "SEMUA KELAS" })}>
+              🗑 Padam Semua Kelas
+            </button>
           </div>
         )}
       </div>
 
+      {/* Add class modal */}
+      {addClassModal && (
+        <Modal title="Tambah Kelas Baru" onClose={() => { setAddClassModal(false); setNewClassName(""); setErr(""); }}>
+          <input className="field-input" style={{ marginBottom: 12 }} placeholder="Nama kelas (cth. 3 AMETHYST)"
+            value={newClassName} onChange={e => setNewClassName(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleAddClass()}/>
+          {err && <div style={{ fontSize: 12, color: "var(--strawberry)", fontWeight: 700, marginBottom: 8 }}>⚠ {err}</div>}
+          <button className="btn btn-primary btn-full"
+            disabled={busy || !newClassName.trim()}
+            onClick={handleAddClass}>
+            {busy ? "Menyimpan…" : "Tambah Kelas"}
+          </button>
+        </Modal>
+      )}
+
+      {/* Delete confirm modal */}
       {confirmDelete && (
         <Modal title={`Padam ${confirmDelete.label}?`} onClose={() => setConfirmDelete(null)}>
-          <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600, marginBottom: 12 }}>Tindakan ini tidak boleh dibatalkan. Semua murid dalam kelas ini juga akan dipadam.</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600, marginBottom: 12 }}>
+            {confirmDelete.id === "__all__"
+              ? "Semua kelas dan murid akan dipadam. Tindakan ini tidak boleh dibatalkan."
+              : "Semua murid dalam kelas ini juga akan dipadam. Tindakan ini tidak boleh dibatalkan."}
+          </div>
           <div style={{ display: "flex", gap: 10 }}>
-            <button className="btn btn-primary btn-full" style={{ background: "var(--strawberry)" }} disabled={busy} onClick={confirmAction}>
+            <button className="btn btn-primary btn-full" style={{ background: "var(--strawberry)" }} disabled={busy}
+              onClick={confirmDelete.id === "__all__" ? handleDeleteAll : handleDeleteClass}>
               {busy ? "Memadam…" : "Ya, Padam"}
             </button>
             <button className="btn btn-ghost btn-full" onClick={() => setConfirmDelete(null)}>Batal</button>

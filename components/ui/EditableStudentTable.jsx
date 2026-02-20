@@ -1,11 +1,11 @@
 'use client';
 
 export default function EditableStudentTable({ rows, onChange }) {
-  const update = (i, field, val) => {
-    const next = rows.map((r, idx) => idx === i ? { ...r, [field]: val } : r);
+  const update = (i, val) => {
+    const next = rows.map((r, idx) => idx === i ? { ...r, full_name: val } : r);
     onChange(next);
   };
-  const addRow = () => onChange([...rows, { class_name: "", full_name: "", _status: "added" }]);
+  const addRow = () => onChange([...rows, { full_name: "", _status: "added" }]);
   const removeRow = (i) => onChange(rows.filter((_, idx) => idx !== i));
 
   return (
@@ -21,29 +21,20 @@ export default function EditableStudentTable({ rows, onChange }) {
           <thead>
             <tr style={{ background: "var(--strawberry-pale)", position: "sticky", top: 0, zIndex: 2 }}>
               <th style={{ width: 32, padding: "8px 6px", fontSize: 10, fontWeight: 800, color: "var(--muted)", textAlign: "center" }}>#</th>
-              <th style={{ padding: "8px 10px", fontSize: 10, fontWeight: 800, color: "var(--muted)", textAlign: "left" }}>KELAS</th>
               <th style={{ padding: "8px 10px", fontSize: 10, fontWeight: 800, color: "var(--muted)", textAlign: "left" }}>NAMA MURID</th>
               <th style={{ width: 32 }}></th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row, i) => {
-              const isError = !row.class_name || !row.full_name;
+              const isError = !row.full_name;
               return (
                 <tr key={i} style={{ borderTop: "1px solid var(--border)", background: row._status === "added" ? "var(--matcha-pale)" : isError ? "#FFF5F7" : "white" }}>
                   <td style={{ padding: "4px 6px", fontSize: 11, color: "var(--muted)", textAlign: "center", fontWeight: 700 }}>{i + 1}</td>
                   <td style={{ padding: "4px 6px" }}>
                     <input
-                      value={row.class_name}
-                      onChange={e => update(i, "class_name", e.target.value)}
-                      style={{ width: "100%", border: "none", outline: "none", fontSize: 13, fontWeight: 700, fontFamily: "var(--font-nunito), Nunito, sans-serif", background: "transparent", color: !row.class_name ? "var(--strawberry)" : "var(--charcoal)", padding: "4px 2px" }}
-                      placeholder="Kelas…"
-                    />
-                  </td>
-                  <td style={{ padding: "4px 6px" }}>
-                    <input
                       value={row.full_name}
-                      onChange={e => update(i, "full_name", e.target.value)}
+                      onChange={e => update(i, e.target.value)}
                       style={{ width: "100%", border: "none", outline: "none", fontSize: 13, fontWeight: 600, fontFamily: "var(--font-nunito), Nunito, sans-serif", background: "transparent", color: !row.full_name ? "var(--strawberry)" : "var(--charcoal)", padding: "4px 2px" }}
                       placeholder="Nama murid…"
                     />
@@ -57,9 +48,9 @@ export default function EditableStudentTable({ rows, onChange }) {
           </tbody>
         </table>
       </div>
-      {rows.some(r => !r.class_name || !r.full_name) && (
+      {rows.some(r => !r.full_name) && (
         <div style={{ marginTop: 8, fontSize: 12, color: "var(--strawberry)", fontWeight: 700 }}>
-          ⚠ Baris tanpa kelas atau nama akan diabaikan semasa import
+          ⚠ Baris tanpa nama akan diabaikan semasa simpan
         </div>
       )}
     </div>
