@@ -80,6 +80,8 @@ function curriculumToRows(items) {
   }));
 }
 
+const normClass = (s) => s.trim().toLowerCase();
+
 // ─── STUDENTS SECTION ────────────────────────────────────────────────────────
 function StudentsSection({
   students, classes,
@@ -122,13 +124,20 @@ function StudentsSection({
     const deletedIds = original.filter(r => r._id && !currentIds.has(r._id)).map(r => r._id);
     if (deletedIds.length > 0) await deleteStudents(deletedIds);
 
-    // New rows: no _id
+    // New rows: no _id — group by class first so each class is created once
     const newRows = validRows.filter(r => !r._id);
-    for (const row of newRows) {
-      // Find or create class
-      let cls = classes.find(c => c.name.trim().toLowerCase() === row.class_name.trim().toLowerCase());
-      if (!cls) cls = await createClass(row.class_name.trim());
-      await addStudent(cls.id, row.full_name.trim());
+    if (newRows.length > 0) {
+      const byClass = new Map();
+      newRows.forEach(row => {
+        const key = normClass(row.class_name);
+        if (!byClass.has(key)) byClass.set(key, { displayName: row.class_name.trim(), names: [] });
+        byClass.get(key).names.push(row.full_name.trim());
+      });
+      for (const { displayName, names } of byClass.values()) {
+        let cls = classes.find(c => normClass(c.name) === normClass(displayName));
+        if (!cls) cls = await createClass(displayName);
+        await importStudents(cls.id, names);
+      }
     }
 
     // Renamed students (same _id, different full_name) — no rename API exists, skip for now
