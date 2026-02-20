@@ -139,7 +139,10 @@ function StudentsSection({
 
   const activeRows = rowsByClass[activeClassId] || [];
   const activeOriginal = originalByClass[activeClassId] || [];
-  const isDirty = activeClassId && JSON.stringify(activeRows) !== JSON.stringify(activeOriginal);
+  const isDirty = activeClassId && (
+    activeRows.length !== activeOriginal.length ||
+    activeRows.some((r, i) => r._id !== activeOriginal[i]._id || r.full_name !== activeOriginal[i].full_name)
+  );
 
   const wrap = async (fn) => {
     setBusy(true); setErr("");
@@ -229,6 +232,8 @@ function StudentsSection({
           ...names.map(n => ({ full_name: n, _status: "added" })),
         ];
       });
+
+      if (!byClass.size) return;
 
       setRowsByClass(prev => ({ ...prev, ...newRowsByClass }));
       setPendingClasses(prev => ({ ...prev, ...newPending }));
