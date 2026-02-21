@@ -62,6 +62,28 @@ export function AuthProvider({ children }) {
     return { error }
   }
 
+  const updateDisplayName = async (name) => {
+    const { data, error } = await supabase.auth.updateUser({
+      data: { display_name: name },
+    })
+    if (!error && data?.user) setUser(data.user)
+    return { data, error }
+  }
+
+  const updateEmail = async (newEmail) => {
+    const { data, error } = await supabase.auth.updateUser({
+      email: newEmail,
+    })
+    return { data, error }
+  }
+
+  const updatePassword = async (newPassword) => {
+    const { data, error } = await supabase.auth.updateUser({
+      password: newPassword,
+    })
+    return { data, error }
+  }
+
   const value = {
     user,
     loading,
@@ -69,6 +91,9 @@ export function AuthProvider({ children }) {
     signIn,
     signInWithGoogle,
     signOut,
+    updateDisplayName,
+    updateEmail,
+    updatePassword,
     supabase,
   }
 
