@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from "react";
+import { useAuth } from "@/components/AuthContext";
 import { useSupabaseData } from "@/lib/hooks/useSupabaseData";
 import { Icons } from "@/components/ui/Icons";
 import FloralCorner from "@/components/ui/FloralCorner";
@@ -14,6 +15,7 @@ import LaporanScreen from "@/components/screens/LaporanScreen";
 import TetapanScreen from "@/components/screens/TetapanScreen";
 
 export default function PbdApp() {
+  const { user, signOut, updateDisplayName, updateEmail, updatePassword } = useAuth();
   const {
     loading: dataLoading,
     classes,
@@ -146,6 +148,8 @@ export default function PbdApp() {
           importStudents={importStudents}
           importCurriculum={importCurriculum} updateCurriculumSet={updateCurriculumSet}
           deleteCurriculumSet={deleteCurriculumSet}
+          user={user} updateDisplayName={updateDisplayName} updateEmail={updateEmail}
+          updatePassword={updatePassword} signOut={signOut}
         />
       )}
 

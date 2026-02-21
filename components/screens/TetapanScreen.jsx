@@ -690,12 +690,133 @@ function CurriculumSection({
   );
 }
 
+// ─── AKAUN SECTION ──────────────────────────────────────────────────────────
+function AkaunSection({ user, updateDisplayName, updateEmail, updatePassword, signOut, onBack }) {
+  const [displayName, setDisplayName] = useState(user?.user_metadata?.display_name || "");
+  const [email, setEmail] = useState(user?.email || "");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const wrap = async (key, fn) => {
+    setBusy(key); setErr(""); setSuccess("");
+    try { await fn(); }
+    catch (e) { setErr(e.message); }
+    finally { setBusy(""); }
+  };
+
+  const handleSaveName = () => wrap("name", async () => {
+    const name = displayName.trim();
+    if (!name) throw new Error("Nama paparan tidak boleh kosong.");
+    const { error } = await updateDisplayName(name);
+    if (error) throw error;
+    setSuccess("Nama paparan berjaya dikemaskini.");
+  });
+
+  const handleSaveEmail = () => wrap("email", async () => {
+    const e = email.trim();
+    if (!e) throw new Error("Emel tidak boleh kosong.");
+    if (e === user?.email) throw new Error("Emel sama dengan emel semasa.");
+    const { error } = await updateEmail(e);
+    if (error) throw error;
+    setSuccess("Emel pengesahan dihantar ke alamat baru. Sila semak peti masuk.");
+  });
+
+  const handleSavePassword = () => wrap("password", async () => {
+    if (newPassword.length < 6) throw new Error("Kata laluan minimum 6 aksara.");
+    if (newPassword !== confirmPassword) throw new Error("Kata laluan tidak sepadan.");
+    const { error } = await updatePassword(newPassword);
+    if (error) throw error;
+    setNewPassword(""); setConfirmPassword("");
+    setSuccess("Kata laluan berjaya dikemaskini.");
+  });
+
+  const handleSignOut = () => wrap("signout", async () => {
+    const { error } = await signOut();
+    if (error) throw error;
+  });
+
+  const isGoogleOnly = user?.app_metadata?.provider === "google" && !user?.app_metadata?.providers?.includes("email");
+
+  return (
+    <div className="screen" style={{ paddingBottom: 20 }}>
+      <div className="header-bar sticky-top">
+        <button className="header-back" onClick={onBack}><Icons.back/></button>
+        <div className="header-info">
+          <div className="header-line1">Akaun</div>
+          <div className="header-line2">{user?.email}</div>
+        </div>
+      </div>
+
+      <div style={{ padding: "0 16px 16px" }}>
+        {err && <div style={{ fontSize: 12, color: "var(--strawberry)", fontWeight: 700, marginBottom: 12, padding: "10px 14px", background: "var(--strawberry-pale)", borderRadius: 10 }}>⚠ {err}</div>}
+        {success && <div style={{ fontSize: 12, color: "var(--matcha-dark, #2e7d32)", fontWeight: 700, marginBottom: 12, padding: "10px 14px", background: "var(--matcha-pale)", borderRadius: 10 }}>{success}</div>}
+
+        {/* Display Name */}
+        <div className="section-label">Nama Paparan</div>
+        <div className="card">
+          <input className="field-input" value={displayName} onChange={e => setDisplayName(e.target.value)}
+            placeholder="Cik Aminah" style={{ marginBottom: 10 }}/>
+          <button className="btn btn-primary btn-full" disabled={busy === "name" || displayName.trim() === (user?.user_metadata?.display_name || "")}
+            onClick={handleSaveName}>
+            {busy === "name" ? "Menyimpan…" : "Simpan Nama"}
+          </button>
+        </div>
+
+        {/* Email */}
+        <div className="section-label">Emel</div>
+        <div className="card">
+          <input className="field-input" type="email" value={email} onChange={e => setEmail(e.target.value)}
+            placeholder="cikgu@sekolah.edu.my" style={{ marginBottom: 4 }}/>
+          <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600, marginBottom: 10 }}>
+            Emel pengesahan akan dihantar ke alamat baru.
+          </div>
+          <button className="btn btn-primary btn-full" disabled={busy === "email" || email.trim() === user?.email}
+            onClick={handleSaveEmail}>
+            {busy === "email" ? "Menyimpan…" : "Tukar Emel"}
+          </button>
+        </div>
+
+        {/* Password */}
+        <div className="section-label">Kata Laluan</div>
+        <div className="card">
+          {isGoogleOnly && (
+            <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginBottom: 10 }}>
+              Akaun anda menggunakan Google. Tetapkan kata laluan untuk log masuk dengan emel juga.
+            </div>
+          )}
+          <input className="field-input" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)}
+            placeholder="Kata laluan baru" minLength={6} style={{ marginBottom: 8 }}/>
+          <input className="field-input" type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+            placeholder="Sahkan kata laluan" minLength={6} style={{ marginBottom: 10 }}/>
+          <button className="btn btn-primary btn-full" disabled={busy === "password" || !newPassword || !confirmPassword}
+            onClick={handleSavePassword}>
+            {busy === "password" ? "Menyimpan…" : "Tukar Kata Laluan"}
+          </button>
+        </div>
+
+        {/* Sign Out */}
+        <div style={{ marginTop: 24 }}>
+          <button className="btn btn-ghost btn-full" style={{ color: "var(--strawberry)", fontWeight: 700 }}
+            disabled={busy === "signout"} onClick={handleSignOut}>
+            {busy === "signout" ? "Log keluar…" : "Log Keluar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN TETAPAN SCREEN ──────────────────────────────────────────────────────
 export default function TetapanScreen({
   students, curriculum, curriculumSets, classes,
   createClass, renameClass, deleteClass, deleteAllClasses,
   addStudent, deleteStudent, deleteStudents, importStudents,
   importCurriculum, updateCurriculumSet, deleteCurriculumSet,
+  user, updateDisplayName, updateEmail, updatePassword, signOut,
 }) {
   const [section, setSection] = useState("home");
 
@@ -722,6 +843,17 @@ export default function TetapanScreen({
     />
   );
 
+  if (section === "akaun") return (
+    <AkaunSection
+      user={user}
+      updateDisplayName={updateDisplayName}
+      updateEmail={updateEmail}
+      updatePassword={updatePassword}
+      signOut={signOut}
+      onBack={() => setSection("home")}
+    />
+  );
+
   return (
     <div className="screen">
       <div className="page-header">
@@ -731,6 +863,7 @@ export default function TetapanScreen({
       {[
         { key: "students", icon: "👨‍🎓", title: "Murid & Kelas", desc: `${students.length} murid, ${classes.length} kelas` },
         { key: "curriculum", icon: "📚", title: "Set Kurikulum", desc: `${sets.length} set, ${curriculum.length} tajuk` },
+        { key: "akaun", icon: "👤", title: "Akaun", desc: user?.email || "Tetapan akaun" },
       ].map(item => (
         <div key={item.key} className="session-card" onClick={() => setSection(item.key)}>
           <div style={{ fontSize: 28 }}>{item.icon}</div>
@@ -741,21 +874,6 @@ export default function TetapanScreen({
           <div style={{ marginLeft: "auto", color: "var(--muted)" }}>›</div>
         </div>
       ))}
-      <div className="section-label">Keutamaan</div>
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>Label TP</span>
-          <span className="pill pill-pink">TP1–TP6 / TD</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>Tindakan Bulk Default</span>
-          <span className="pill pill-green">Isi Kosong</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>Ganti Semua Perlu Sahkan</span>
-          <span className="pill pill-green">Ya ✓</span>
-        </div>
-      </div>
     </div>
   );
 }
